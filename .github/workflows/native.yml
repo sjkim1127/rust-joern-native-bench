@@ -1,0 +1,76 @@
+name: Native C++ smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  RUSTUP_TOOLCHAIN: 1.90.0
+  RAYON_NUM_THREADS: 2
+
+jobs:
+  native:
+    name: Native x64 on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Fetch Rust-Joern baseline
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Noelo-Lab/rust-joern
+          ref: 6b85a04213f1bd747dddde4b23f5c984b0601305
+          path: backend
+          persist-credentials: false
+
+      - name: Fetch TinyXML2
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: leethomason/tinyxml2
+          ref: 8224e427b655b83dae5e2298f1e6919523a78737
+          path: tinyxml2
+          persist-credentials: false
+
+      - name: Build the native Rust-Joern CLI
+        run: |
+          rustup toolchain install 1.90.0 --profile minimal
+          cargo build --manifest-path backend/Cargo.toml --locked --release
+
+      - name: Run Linux build cells
+        if: runner.os == 'Linux'
+        run: |
+          python3 scripts/run_native.py --standard 14
+          python3 scripts/run_native.py --standard 23
+
+      - name: Run Windows MSVC build cells
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $visualStudio = & $installer -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $visualStudio) { throw 'MSVC x64 toolchain was not found' }
+          & (Join-Path $visualStudio 'Common7/Tools/Launch-VsDevShell.ps1') -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          python scripts/run_native.py --standard 14
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/run_native.py --standard 23
+
+      - name: Retain native run summaries
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-${{ matrix.os }}
+          path: |
+            results/*/*.json
+            results/*/*.log
